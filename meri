@@ -1,0 +1,122 @@
+This assumes Jenkins is now running at http://<VM-IP>:8080 and you’ve logged in. If not, finish the Java 21 fix first.
+
+Step 0: Prerequisites on the VM
+
+Jenkins needs the JDK, not just the JRE, to compile. The openjdk-21-jre package we installed has java but no javac.
+
+bash
+sudo apt install -y openjdk-21-jdk git
+javac -version     # should print javac 21.x
+git --version
+Step 1: Create the Hello World app
+bash
+mkdir ~/hello-jenkins && cd ~/hello-jenkins
+
+Create HelloWorld.java:
+
+java
+public class HelloWorld {
+    public static void main(String[] args) {
+        System.out.println("Hello, World!");
+    }
+}
+
+Test it locally:
+
+bash
+javac HelloWorld.java
+java HelloWorld
+
+Now create the Jenkinsfile (no extension) in the same folder. This is the pipeline definition, and it lives in the repo with your code:
+
+groovy
+pipeline {
+    agent any
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        stage('Compile') {
+            steps {
+                sh 'javac HelloWorld.java'
+            }
+        }
+        stage('Run') {
+            steps {
+                sh 'java HelloWorld | tee output.txt'
+            }
+        }
+        stage('Verify') {
+            steps {
+                sh 'grep -q "Hello, World!" output.txt'
+                echo 'Output verified: Hello, World! was printed.'
+            }
+        }
+    }
+}
+
+What each stage does:
+
+Checkout pulls the code from GitHub.
+Compile runs javac, producing HelloWorld.class.
+Run executes the program and saves its output to output.txt while still showing it in the console.
+Verify fails the build if the expected text isn’t in the output. That’s the automated version of “check the console”.
+Step 2: Push to GitHub
+On github.com, click New repository, name it hello-jenkins, keep it Public (this avoids needing Jenkins credentials), and don’t add a README.
+Back in the VM:
+bash
+cd ~/hello-jenkins
+git init
+git branch -M main
+git config user.name "Your Name"
+git config user.email "you@example.com"
+git add .
+git commit -m "Add HelloWorld and Jenkinsfile"
+git remote add origin https://github.com/<your-username>/hello-jenkins.git
+git push -u origin main
+
+When prompted for a password, GitHub no longer accepts your account password. Create a Personal Access Token at GitHub → Settings → Developer settings → Personal access tokens, with the repo scope, and paste it as the password.
+
+Step 3: Create the Jenkins Pipeline job
+Jenkins dashboard → New Item → name hello-world-pipeline → choose Pipeline → OK.
+Scroll to Build Triggers and tick Poll SCM. In the Schedule box enter:
+   H/2 * * * *
+
+This makes Jenkins check GitHub every ~2 minutes and build only if there’s a new commit.
+3. Scroll to Pipeline and set:
+
+Definition: Pipeline script from SCM
+SCM: Git
+Repository URL: https://github.com/<your-username>/hello-jenkins.git
+Branch Specifier: */main (Jenkins defaults to */master, which is the most common reason for a failed first build)
+Script Path: Jenkinsfile
+Save.
+Step 4: Run it and verify
+Click Build Now for the first run.
+Open the build under Build History, then Console Output. You should see:
+   + javac HelloWorld.java
+   + java HelloWorld
+   Hello, World!
+   + grep -q Hello, World! output.txt
+   Output verified: Hello, World! was printed.
+   Finished: SUCCESS
+The Stage View on the job page should show all four stages green.
+Step 5: Prove Poll SCM works
+
+Change the message in HelloWorld.java (for example "Hello, Jenkins!") and update the grep in the Jenkinsfile to match, then:
+
+bash
+git add . && git commit -m "Change greeting" && git push
+
+Don’t click anything in Jenkins. Within about 2 minutes a new build starts on its own. Check Polling Log in the left menu of the job to see Jenkins detecting the change. That’s the trigger working.
+
+Common problems
+javac: command not found in the build: the JDK isn’t installed. Run sudo apt install openjdk-21-jdk, then sudo systemctl restart jenkins.
+couldn't find any revision to build: the branch specifier is wrong. Use */main.
+Poll SCM never triggers: the very first build must happen manually, and the schedule must be saved. Check the Polling Log for errors.
+Git push asks for a password again and fails: use the token, not your GitHub password.
+
+If you’d like, I can also show how to put the Poll SCM trigger inside the Jenkinsfile itself, or add a test stage.
